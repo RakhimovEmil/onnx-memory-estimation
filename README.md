@@ -48,3 +48,9 @@ However, the naive strategy does not support this approach.
 - [ONNX](https://onnx.ai/)
 - [netron.app: a visualizer for ONNX graphs](https://netron.app)
 - [MODeL (Memory Optimizations for Deep Learning)](https://github.com/facebookresearch/MODel_opt)
+
+## Result:
+
+naive: 104 660 992
+greedy: 17 207 296
+MODeL:  12 390 400
