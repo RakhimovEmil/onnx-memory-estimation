@@ -1,9 +1,14 @@
-from typing import Any
 import onnx
-from google.protobuf.json_format import MessageToDict
 
-from memory import TensorInfo, DeviceMemory
+from google.protobuf.json_format import MessageToDict
+from typing import List
+
+from containers import MutableTensorInfo
 from expression import Expression
+from memory import (
+    TensorInfo, 
+    DeviceMemory
+)
 
 
 class NaiveTensorMemoryEstimator:
@@ -56,7 +61,6 @@ def estimate_mutable_tensors_naive(
     max_symbolic_param_values: dict[str, int],
     memory: DeviceMemory,
 ) -> dict[str, TensorInfo]:
-    num_nodes = len(model.graph.node)
     result = {}
 
     estimator = NaiveTensorMemoryEstimator(model, max_symbolic_param_values, memory)
