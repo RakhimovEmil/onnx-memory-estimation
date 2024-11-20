@@ -1,4 +1,5 @@
 from memory.tensor_info import TensorInfo
+from math import prod
 
 
 class DeviceMemory:
@@ -30,13 +31,9 @@ class DeviceMemory:
 
     @staticmethod
     def to_matrix_dims(dims: list[int]) -> tuple[int, int]:
-        if len(dims) == 0:
-            return (1, 1)
-
-        cols = 1
-        for idx in range(len(dims) - 1):
-            cols *= dims[idx]
-        return cols, dims[-1]
+        if not dims:
+            return 1, 1
+        return prod(dims[:-1]), dims[-1]
     
     def get_tensor_size(self, tensor: TensorInfo) -> int:
         cols, rows = DeviceMemory.to_matrix_dims(tensor.dims)
@@ -66,3 +63,9 @@ class DeviceMemory:
         # 'UINT4': 1,
         # 'INT4': 1,
     }
+
+class DevicePointer:
+    def __init__(self, type: str, segment: int, offset: int):
+        self.type = type
+        self.segment = segment
+        self.offset = offset

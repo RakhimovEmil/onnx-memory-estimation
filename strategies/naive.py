@@ -1,9 +1,10 @@
-from typing import Any
-import onnx
-from google.protobuf.json_format import MessageToDict
-
 from memory import TensorInfo, DeviceMemory
 from expression import Expression
+from containers import MutableTensorInfo
+
+from typing import List
+import onnx
+from google.protobuf.json_format import MessageToDict
 
 
 class NaiveTensorMemoryEstimator:
@@ -37,34 +38,40 @@ class NaiveTensorMemoryEstimator:
 
         return truncated
 
-    def estimate_single_tensor(self, tensor: onnx.TensorProto) -> TensorInfo:
-        dims = [self._eval_dim(dim) for dim in tensor.shape.dim]
-
-        result = TensorInfo(
-            dims=dims,
-            dtype=onnx.TensorProto.DataType.Name(tensor.elem_type),
+    def estimate_single_tensor(self, tensor_name: str, tensor: onnx.TensorProto) -> TensorInfo:
+        tensor_info = MutableTensorInfo(
+            name=tensor_name,
             lifetime_begin=0,
-            lifetime_end=self.num_nodes,  # Every tensor is alive from beginning to end
-            memory_offset=self.total_allocated_bytes,
+            lifetime_end=self.num_nodes
         )
-        self.total_allocated_bytes += self.memory.get_tensor_size(result)
-        return result
+
+        dims = [self._eval_dim(dim) for dim in tensor.shape.dim]
+        cols, rows = self.memory.to_matrix_dims(dims)
+        
+        tensor_info.set_estimated_parameters(
+            cols=cols,
+            rows=rows,
+            size=self.memory.get_matrix_size(cols, rows, onnx.TensorProto.DataType.Name(tensor.elem_type))
+        )
+
+        self.total_allocated_bytes += tensor_info.estimated_size
+        return tensor_info
 
 
 def estimate_mutable_tensors_naive(
     model: onnx.ModelProto,
     max_symbolic_param_values: dict[str, int],
     memory: DeviceMemory,
+    logs_enabled: False,
 ) -> dict[str, TensorInfo]:
-    num_nodes = len(model.graph.node)
-    result = {}
+    tensors: List[MutableTensorInfo] = list()
 
     estimator = NaiveTensorMemoryEstimator(model, max_symbolic_param_values, memory)
 
-    for input_ in model.graph.input:
-        result[input_.name] = estimator.estimate_single_tensor(input_.type.tensor_type)
+    # for input in model.graph.input:
+    #     tensors.append(estimator.estimate_single_tensor(input.name, input.type.tensor_type))
 
     for value in model.graph.value_info:
-        result[value.name] = estimator.estimate_single_tensor(value.type.tensor_type)
+        tensors.append(estimator.estimate_single_tensor(value.name, value.type.tensor_type))
 
-    return estimator.total_allocated_bytes, result
+    return estimator.total_allocated_bytes, tensors
