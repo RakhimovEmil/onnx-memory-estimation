@@ -21,7 +21,7 @@ def get_strategy(strategy_name: str):
         raise NotImplementedError
     return strategies[strategy_name]
 
-max_symbolic_param_values = {
+max_symbolic_var_params = {
     'bs': 8,
     'sq': 64,
     'B': 16,
@@ -35,6 +35,7 @@ max_symbolic_param_values = {
     'num_channels': 3
 }
 
+
 def get_strategy(strategy_name: str):
     strategies = {
         'naive': estimate_mutable_tensors_naive,
@@ -45,6 +46,7 @@ def get_strategy(strategy_name: str):
         raise NotImplementedError
     return strategies[strategy_name]
 
+
 def main(args: argparse.Namespace):
     model = onnx.load_model(args.model_path)
 
@@ -52,7 +54,7 @@ def main(args: argparse.Namespace):
 
     strategy = get_strategy(args.strategy)
     mutable_memory_size, mutable_tensors_info = strategy(
-        model, max_symbolic_param_values, memory, args.verbose
+        model, max_symbolic_var_params, memory, args.verbose
     )
 
     if args.verbose:
@@ -61,7 +63,7 @@ def main(args: argparse.Namespace):
             print(tensor_info.tensor_name, tensor_info.lifetime_begin, tensor_info.lifetime_end, tensor_info.estimated_size) # добавить адрес 
     
     if args.visualize:
-        visualize(args.strategy, mutable_tensors_info)
+        visualize(args.model_path, args.strategy, mutable_tensors_info)
         
     print(f'\nTotal memory: {mutable_memory_size} bytes')
 

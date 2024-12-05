@@ -18,12 +18,12 @@ from memory import search_in_pool
 
 def estimate_mutable_tensors_greedy(
     model: onnx.ModelProto,
-    max_batch_params: dict[str, int],
+    max_symbolic_var_params: dict[str, int],
     memory: DeviceMemory,
     logs_enabled: False
 ) -> dict[str, TensorInfo]:
-    graph = Graph(model, memory, set(max_batch_params.keys()))
-    last_input_user_indexes = graph.get_last_input_user_index()
+    graph = Graph(model, memory, set(max_symbolic_var_params.keys()))
+    tensor_to_lifetime_end = graph.get_tensor_to_lifetime_end()
 
     tensors_info: List[MutableTensorInfo] = list()
     total_memory_estimated = 0
@@ -33,16 +33,17 @@ def estimate_mutable_tensors_greedy(
 
     for idx, node in enumerate(graph.storage.nodes):
         for out_name in node.output_names:
-            death_time = last_input_user_indexes[out_name]
-            tensors_info.append(MutableTensorInfo(out_name, idx, death_time))
-            graph.estimate_single_tensor(tensors_info[-1], max_batch_params)
+            lifetime_end = tensor_to_lifetime_end[out_name]
+            tensors_info.append(MutableTensorInfo(out_name, idx, lifetime_end))
+            graph.estimate_single_tensor(tensors_info[-1], max_symbolic_var_params)
 
+    #! раскомментировать если нужно добавить input
     # for input_name in graph.storage.input_names:
     #     tensor_value = graph.storage.values.get(input_name, None)
 
     #     if isinstance(tensor_value, MutableTensor):
     #         tensors_info.append(MutableTensorInfo(input_name, 0, total_nodes))
-    #         graph.estimate_single_tensor(tensors_info[-1], max_batch_params)
+    #         graph.estimate_single_tensor(tensors_info[-1], max_symbolic_var_params)
 
     tensors_info.sort()
 
