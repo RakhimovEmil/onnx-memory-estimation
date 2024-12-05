@@ -22,7 +22,7 @@ def visualize(model_name: str, strategy: str, tensor_infos: List[MutableTensorIn
             time_steps.append(time)
             memory_snapshots.append(memory_usage.copy())
         memory_usage[tensor_name] += size_change
-        
+
     time_steps.append(events[-1][0])
     memory_snapshots.append(memory_usage.copy())
 
@@ -117,7 +117,7 @@ def visualize(model_name: str, strategy: str, tensor_infos: List[MutableTensorIn
                     insert=(x, y),
                     size=(width, height),
                     fill=tensor_colors[tensor_name],
-                    onmouseover=f"document.getElementById('hover_info').textContent='**Tensor**: {tensor_name}, **Size**: {size:.2f} MB, **Steps**: {tensor.lifetime_begin}:{tensor.lifetime_end}';",
+                    onmouseover=f"document.getElementById('hover_info').textContent='Tensor: {tensor_name}, Size: {size:.2f} MB, Steps: {tensor.lifetime_begin}:{tensor.lifetime_end}';",
                     onmouseout="document.getElementById('hover_info').textContent='';"
                 )
                 dwg.add(rect)
