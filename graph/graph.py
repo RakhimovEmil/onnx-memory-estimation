@@ -263,6 +263,15 @@ class Graph:
                 for ts in range(0, step_limit)
             ) <= peak_mem_no_frag
 
+        # Constraint 14 (operations cannot be calculated concurrently)
+        for ts in range(0, step_limit):
+            problem += pulp.lpSum(cvars[tensor_name][ts] for tensor_name in mutable_tensor_names) >= 0
+            problem += pulp.lpSum(cvars[tensor_name][ts] for tensor_name in mutable_tensor_names) <= 1
+        # for ts in range(step_limit):
+        #     for i, tensor_name_1 in enumerate(mutable_tensor_names):
+        #         for tensor_name_2 in mutable_tensor_names:
+        #             problem += cvars[tensor_name_1][ts] + cvars[tensor_name_2][ts] <= 1
+
 
         # Location constraints
         offvars: Dict[str, pulp.LpVariable] = dict()
@@ -310,6 +319,7 @@ class Graph:
             print(f'Time taken: {end_time - start_time:.3f} seconds\n')
 
         for tensor_name in mutable_tensor_names:
+            # breakpoint()
             lifetime_begin = [cast(float, cvar.value()) for cvar in cvars[tensor_name]].index(1)
             lifetime_end = step_limit - 1 - [cast(float, cvar.value()) + cast(float, pvar.value()) for cvar, pvar in zip(cvars[tensor_name], pvars[tensor_name])][lifetime_begin:][::-1].index(1)
 
@@ -349,205 +359,10 @@ class Graph:
         cur_lifetime_max = 0
 
         for (l, r) in indexes:
+            print('lol')
             new_tensors: List[MutableTensorInfo] = self._find_optional_strategy(l, r, max_symbolic_var_params, logs_enabled, time_limit)
             tensors, cur_lifetime_max = _fix_lifetime(tensors, new_tensors, cur_lifetime_max)
         return tensors
     
     def straight_find_optional_strategy(self, max_symbolic_var_params: Dict[str, int], logs_enabled: bool = False, time_limit: int = 18000) -> List[MutableTensorInfo]:
-        def get_mutable_tensor_names(tensor_names: Iterable[str]) -> Set[str]:
-            return {
-                tensor_name for tensor_name in tensor_names
-                if isinstance(self.storage.values[tensor_name], MutableTensor)
-            }
-
-        start_time = time()
-        step_limit = len(self.storage.nodes) + 1
-
-        mutable_tensor_names: Set[str] = set()
-        tensor_name_to_birth_node: Dict[str, NodeWrapper] = dict()
-
-        input_names, output_names = set(), set()
-        asap, alap = dict(), dict()
-        max_asap = 0
-
-        for node in self.storage.nodes:
-            mutable_input_names = get_mutable_tensor_names(node.input_names)
-            mutable_tensor_names.update(mutable_input_names)
-
-            # every single node outputs ONLY mutable tensors
-            mutable_tensor_names.update(node.output_names)
-
-            for out_name in node.output_names:
-                tensor_name_to_birth_node[out_name] = node
-
-            input_names.update(node.input_names)
-            output_names.update(node.output_names)
-
-            asap[node.name] = get_ancestors_max_asap(node, self.storage.edges, asap) + 1
-            max_asap = max(max_asap, asap[node.name])
-
-        alap = get_nodes_alap(self.storage.nodes, self.storage.edges, max_asap)
-
-        if logs_enabled:
-            print(f'Mutable tensors: {len(mutable_tensor_names)}')
-
-        tensor_names_to_tensors: Dict[str, MutableTensorInfo] = dict()
-        for tensor_name in mutable_tensor_names:
-            tensor_names_to_tensors[tensor_name] = MutableTensorInfo(tensor_name, 0, step_limit) # lifetime is to be determined
-            self.estimate_single_tensor(tensor_names_to_tensors[tensor_name], max_symbolic_var_params)
-
-        problem = pulp.LpProblem(name='model_strategy', sense=pulp.LpMinimize)
-        cvars: Dict[str, List[pulp.LpVariable]] = dict()
-        pvars: Dict[str, List[pulp.LpVariable]] = dict()
-        for tensor_name in mutable_tensor_names:
-            cvars[tensor_name] = list()
-            pvars[tensor_name] = list()
-            for ts in range(0, step_limit):
-                cvars[tensor_name].append(pulp.LpVariable(name=f'create_{tensor_name}_at_{ts}', cat=const.LpBinary))
-
-                # hack for no preservations at the first step without prior creation
-                pvars[tensor_name].append(
-                    pulp.LpVariable(name=f'preserve_{tensor_name}_at_{ts}', cat=const.LpBinary) 
-                    if ts > 0 else
-                    pulp.LpVariable(name=f'preserve_{tensor_name}_at_{ts}', lowBound=0, upBound=0, cat=const.LpInteger) 
-                )
-
-        max_peak_mem = sum(tensor.estimated_size for tensor in tensor_names_to_tensors.values())
-        peak_mem = pulp.LpVariable(name='peak_mem', lowBound=0, upBound=max_peak_mem, cat=const.LpInteger)
-        peak_mem_no_frag = pulp.LpVariable(name='peak_mem_no_frag', lowBound=0, upBound=max_peak_mem, cat=const.LpInteger)
-
-        # Validation constraints
-        last_cvar, last_pvar = None, None
-        for tensor_name in mutable_tensor_names:
-            for ts in range(0, step_limit):
-                cur_cvar = cvars[tensor_name][ts]
-                cur_pvar = pvars[tensor_name][ts]
-                
-                src  = self.storage.edges[tensor_name][0]
-                snks = self.storage.edges[tensor_name][1]
-
-                # Constraint 1
-                problem += cur_cvar + cur_pvar <= 1
-
-                # Constraint 2
-                if last_cvar is not None and last_pvar is not None:
-                    problem += cur_pvar <= last_pvar + last_cvar
-
-                last_cvar = cur_cvar
-                last_pvar = cur_pvar
-
-                # check whether it is a model input (should be equivalent to checking presence in the corresponding set)
-                birth_node = tensor_name_to_birth_node.get(tensor_name, None)
-                if birth_node is None:
-                    continue
-
-                # Constraint 4
-                for in_name in get_mutable_tensor_names(birth_node.input_names):
-                    problem += cur_cvar <= pvars[in_name][ts]
-                
-                # Constraint 5
-                for out_name in birth_node.output_names:
-                    problem += cur_cvar == cvars[out_name][ts]
-
-                # Constraint 10
-                if ts < asap[src] or ts > asap[src]:
-                    problem += cur_cvar == 0
-                
-                # Constraint 11
-                max_alap = max((alap[snk] for snk in snks), default=step_limit)
-                if ts < asap[src] or ts > max_alap:
-                    problem += cur_pvar == 0
-                
-                # Constraint 12
-                max_asap = max((asap[snk] for snk in snks), default=step_limit)
-                if ts >= alap[src] + 1 and ts <= max_asap:
-                    problem += cur_pvar == 1 
-
-            # Constraint 3
-            problem += pulp.lpSum(cvars[tensor_name][ts] for ts in range(0, step_limit)) == 1
-
-            # Constraint 13
-            problem += pulp.lpSum(
-                (cvars[tensor_name][ts] + pvars[tensor_name][ts]) *
-                tensor_names_to_tensors[tensor_name].estimated_size
-                for ts in range(0, step_limit)
-            ) <= peak_mem_no_frag
-
-
-        # Location constraints
-        offvars: Dict[str, pulp.LpVariable] = dict()
-
-        # Constraint 8
-        for tensor_name in mutable_tensor_names:
-            offvars[tensor_name] = pulp.LpVariable(name=f'offset_{tensor_name}', lowBound=0, upBound=max_peak_mem, cat=const.LpInteger)
-            problem += offvars[tensor_name] + tensor_names_to_tensors[tensor_name].estimated_size <= peak_mem
-
-        avars: Dict[Tuple[str, str], pulp.LpVariable] = dict()
-        bvars: Dict[Tuple[str, str], pulp.LpVariable] = dict()
-
-        for tensor_name_i in mutable_tensor_names:
-            for tensor_name_j in mutable_tensor_names:
-                if tensor_name_i == tensor_name_j:
-                    continue
-
-                avar = pulp.LpVariable(name=f'a_{tensor_name_i}_{tensor_name_j}', cat=const.LpBinary)
-                bvar = pulp.LpVariable(name=f'b_{tensor_name_i}_{tensor_name_j}', cat=const.LpBinary)
-                avars[tensor_name_i, tensor_name_j] = avar
-                avars[tensor_name_j, tensor_name_i] = avar
-                bvars[tensor_name_i, tensor_name_j] = bvar
-                bvars[tensor_name_j, tensor_name_i] = bvar
-
-                # Constraint 6: p1
-                problem += avar + bvar <= 1
-                for ts in range(0, step_limit):
-                    # Constraint 6: p2
-                    problem += avar + bvar >= (cvars[tensor_name_i][ts] + pvars[tensor_name_i][ts]) + (cvars[tensor_name_j][ts] + pvars[tensor_name_j][ts]) - 1
-                
-                # Constraint 7a
-                problem += offvars[tensor_name_i] + tensor_names_to_tensors[tensor_name_i].estimated_size - offvars[tensor_name_j] <= (1 - avar) * max_peak_mem
-
-                # Constraint 7b
-                problem += offvars[tensor_name_i] - tensor_names_to_tensors[tensor_name_j].estimated_size - offvars[tensor_name_j] >= (bvar - 1) * max_peak_mem
-
-        problem += peak_mem
-        problem += peak_mem_no_frag
-        problem.solve(pulp.PULP_CBC_CMD(msg=logs_enabled, timeLimit=time_limit))
-
-        end_time = time()
-
-        if logs_enabled:
-            print(f'MODeL estimated memory: {pulp.value(peak_mem_no_frag)} bytes')
-            print(f'Time taken: {end_time - start_time:.3f} seconds\n')
-
-        for tensor_name in mutable_tensor_names:
-            lifetime_begin = [cast(float, cvar.value()) for cvar in cvars[tensor_name]].index(1)
-            lifetime_end = step_limit - 1 - [cast(float, cvar.value()) + cast(float, pvar.value()) for cvar, pvar in zip(cvars[tensor_name], pvars[tensor_name])][lifetime_begin:][::-1].index(1)
-
-            tensor_names_to_tensors[tensor_name].lifetime_begin = lifetime_begin
-            tensor_names_to_tensors[tensor_name].lifetime_end = lifetime_end
-        
-        if logs_enabled:
-            tensor_list: List[str] = list()
-            tensor_set: Set[str] = set()
-
-            print('Final schedule:')
-            for node in self.storage.nodes:
-                mutable_input_names = get_mutable_tensor_names(node.input_names)
-                for tensor_name in list(mutable_input_names) + node.output_names:
-                    if tensor_name not in tensor_set:
-                        tensor_list.append(tensor_name)
-                        tensor_set.add(tensor_name)
-
-                print(
-                    f'{node.name}: {", ".join(f"{tensor_names_to_tensors[input_name].lifetime_begin}-{tensor_names_to_tensors[input_name].lifetime_end}" for input_name in mutable_input_names)} -> '
-                    f'{", ".join(f"{tensor_names_to_tensors[output_name].lifetime_begin}-{tensor_names_to_tensors[output_name].lifetime_end}" for output_name in node.output_names)}\n'
-                )
-                
-            print('Tensor placements:')
-            for tensor_name in tensor_list:
-                print(
-                    f'{tensor_name}: from {tensor_names_to_tensors[tensor_name].lifetime_begin} to {tensor_names_to_tensors[tensor_name].lifetime_end} @ '
-                    f'offset {cast(float, offvars[tensor_name].value())} + {tensor_names_to_tensors[tensor_name].estimated_size}\n'
-                )
-
-        return list(tensor_names_to_tensors.values())
+        return self._find_optional_strategy(0, len(self.storage.nodes) - 1, max_symbolic_var_params, logs_enabled, time_limit)
